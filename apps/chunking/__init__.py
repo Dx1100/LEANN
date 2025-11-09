@@ -12,6 +12,7 @@ from pathlib import Path
 try:
     from leann.chunking_utils import (
         CODE_EXTENSIONS,
+        _traditional_chunks_as_dicts,
         create_ast_chunks,
         create_text_chunks,
         create_traditional_chunks,
@@ -25,6 +26,7 @@ except Exception:  # pragma: no cover - best-effort fallback for dev environment
         sys.path.insert(0, str(leann_src))
         from leann.chunking_utils import (
             CODE_EXTENSIONS,
+            _traditional_chunks_as_dicts,
             create_ast_chunks,
             create_text_chunks,
             create_traditional_chunks,
@@ -36,6 +38,7 @@ except Exception:  # pragma: no cover - best-effort fallback for dev environment
 
 __all__ = [
     "CODE_EXTENSIONS",
+    "_traditional_chunks_as_dicts",
     "create_ast_chunks",
     "create_text_chunks",
     "create_traditional_chunks",

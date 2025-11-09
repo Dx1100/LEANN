@@ -10,72 +10,63 @@ import time
 from typing import Any, Optional
 
 import numpy as np
+import tiktoken
 import torch
 
 from .settings import resolve_ollama_host, resolve_openai_api_key, resolve_openai_base_url
 
+# Set up logger with proper level
+logger = logging.getLogger(__name__)
+LOG_LEVEL = os.getenv("LEANN_LOG_LEVEL", "WARNING").upper()
+log_level = getattr(logging, LOG_LEVEL, logging.WARNING)
+logger.setLevel(log_level)
 
-def truncate_to_token_limit(texts: list[str], max_tokens: int = 512) -> list[str]:
-    """
-    Truncate texts to token limit using tiktoken or conservative character truncation.
-
-    Args:
-        texts: List of texts to truncate
-        max_tokens: Maximum tokens allowed per text
-
-    Returns:
-        List of truncated texts that should fit within token limit
-    """
-    try:
-        import tiktoken
-
-        encoder = tiktoken.get_encoding("cl100k_base")
-        truncated = []
-
-        for text in texts:
-            tokens = encoder.encode(text)
-            if len(tokens) > max_tokens:
-                # Truncate to max_tokens and decode back to text
-                truncated_tokens = tokens[:max_tokens]
-                truncated_text = encoder.decode(truncated_tokens)
-                truncated.append(truncated_text)
-                logger.warning(
-                    f"Truncated text from {len(tokens)} to {max_tokens} tokens "
-                    f"(from {len(text)} to {len(truncated_text)} characters)"
-                )
-            else:
-                truncated.append(text)
-        return truncated
-
-    except ImportError:
-        # Fallback: Conservative character truncation
-        # Assume worst case: 1.5 tokens per character for code content
-        char_limit = int(max_tokens / 1.5)
-        truncated = []
-
-        for text in texts:
-            if len(text) > char_limit:
-                truncated_text = text[:char_limit]
-                truncated.append(truncated_text)
-                logger.warning(
-                    f"Truncated text from {len(text)} to {char_limit} characters "
-                    f"(conservative estimate for {max_tokens} tokens)"
-                )
-            else:
-                truncated.append(text)
-        return truncated
+# Token limit registry for embedding models
+# Used as fallback when dynamic discovery fails (e.g., LM Studio, OpenAI)
+# Ollama models use dynamic discovery via /api/show
+EMBEDDING_MODEL_LIMITS = {
+    # Nomic models (common across servers)
+    "nomic-embed-text": 2048,  # Corrected from 512 - verified via /api/show
+    "nomic-embed-text-v1.5": 2048,
+    "nomic-embed-text-v2": 512,
+    # Other embedding models
+    "mxbai-embed-large": 512,
+    "all-minilm": 512,
+    "bge-m3": 8192,
+    "snowflake-arctic-embed": 512,
+    # OpenAI models
+    "text-embedding-3-small": 8192,
+    "text-embedding-3-large": 8192,
+    "text-embedding-ada-002": 8192,
+}
 
 
-def get_model_token_limit(model_name: str) -> int:
+def get_model_token_limit(
+    model_name: str,
+    base_url: Optional[str] = None,
+    default: int = 2048,
+) -> int:
     """
     Get token limit for a given embedding model.
+    Uses hybrid approach: dynamic discovery for Ollama, registry fallback for others.
 
     Args:
         model_name: Name of the embedding model
+        base_url: Base URL of the embedding server (for dynamic discovery)
+        default: Default token limit if model not found
 
     Returns:
-        Token limit for the model, defaults to 512 if unknown
+        Token limit for the model in tokens
     """
+    # Try Ollama dynamic discovery if base_url provided
+    if base_url:
+        # Detect Ollama servers by port or "ollama" in URL
+        if "11434" in base_url or "ollama" in base_url.lower():
+            limit = _query_ollama_context_limit(model_name, base_url)
+            if limit:
+                return limit
+
+    # Fallback to known model registry with version handling (from PR #154)
     # Handle versioned model names (e.g., "nomic-embed-text:latest" -> "nomic-embed-text")
     base_model_name = model_name.split(":")[0]
 
@@ -92,30 +83,110 @@ def get_model_token_limit(model_name: str) -> int:
         if known_model in base_model_name or base_model_name in known_model:
             return limit
 
-    # Default to conservative 512 token limit
-    logger.warning(f"Unknown model '{model_name}', using default 512 token limit")
-    return 512
+    # Default fallback
+    logger.warning(f"Unknown model '{model_name}', using default {default} token limit")
+    return default
 
 
-# Set up logger with proper level
-logger = logging.getLogger(__name__)
-LOG_LEVEL = os.getenv("LEANN_LOG_LEVEL", "WARNING").upper()
-log_level = getattr(logging, LOG_LEVEL, logging.WARNING)
-logger.setLevel(log_level)
+def truncate_to_token_limit(texts: list[str], token_limit: int) -> list[str]:
+    """
+    Truncate texts to fit within token limit using tiktoken.
+
+    Args:
+        texts: List of text strings to truncate
+        token_limit: Maximum number of tokens allowed
+
+    Returns:
+        List of truncated texts (same length as input)
+    """
+    if not texts:
+        return []
+
+    # Use tiktoken with cl100k_base encoding
+    enc = tiktoken.get_encoding("cl100k_base")
+
+    truncated_texts = []
+    truncation_count = 0
+    total_tokens_removed = 0
+    max_original_length = 0
+
+    for i, text in enumerate(texts):
+        tokens = enc.encode(text)
+        original_length = len(tokens)
+
+        if original_length <= token_limit:
+            # Text is within limit, keep as is
+            truncated_texts.append(text)
+        else:
+            # Truncate to token_limit
+            truncated_tokens = tokens[:token_limit]
+            truncated_text = enc.decode(truncated_tokens)
+            truncated_texts.append(truncated_text)
+
+            # Track truncation statistics
+            truncation_count += 1
+            tokens_removed = original_length - token_limit
+            total_tokens_removed += tokens_removed
+            max_original_length = max(max_original_length, original_length)
+
+            # Log individual truncation at WARNING level (first few only)
+            if truncation_count <= 3:
+                logger.warning(
+                    f"Text {i + 1} truncated: {original_length} → {token_limit} tokens "
+                    f"({tokens_removed} tokens removed)"
+                )
+            elif truncation_count == 4:
+                logger.warning("Further truncation warnings suppressed...")
+
+    # Log summary at INFO level
+    if truncation_count > 0:
+        logger.warning(
+            f"Truncation summary: {truncation_count}/{len(texts)} texts truncated "
+            f"(removed {total_tokens_removed} tokens total, longest was {max_original_length} tokens)"
+        )
+    else:
+        logger.debug(
+            f"No truncation needed - all {len(texts)} texts within {token_limit} token limit"
+        )
+
+    return truncated_texts
+
+
+def _query_ollama_context_limit(model_name: str, base_url: str) -> Optional[int]:
+    """
+    Query Ollama /api/show for model context limit.
+
+    Args:
+        model_name: Name of the Ollama model
+        base_url: Base URL of the Ollama server
+
+    Returns:
+        Context limit in tokens if found, None otherwise
+    """
+    try:
+        import requests
+
+        response = requests.post(
+            f"{base_url}/api/show",
+            json={"name": model_name},
+            timeout=5,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if "model_info" in data:
+                # Look for *.context_length in model_info
+                for key, value in data["model_info"].items():
+                    if "context_length" in key and isinstance(value, int):
+                        logger.info(f"Detected {model_name} context limit: {value} tokens")
+                        return value
+    except Exception as e:
+        logger.debug(f"Failed to query Ollama context limit: {e}")
+
+    return None
+
 
 # Global model cache to avoid repeated loading
 _model_cache: dict[str, Any] = {}
-
-# Known embedding model token limits
-EMBEDDING_MODEL_LIMITS = {
-    "nomic-embed-text": 512,
-    "nomic-embed-text-v2": 512,
-    "mxbai-embed-large": 512,
-    "all-minilm": 512,
-    "bge-m3": 8192,
-    "snowflake-arctic-embed": 512,
-    # Add more models as needed
-}
 
 
 def compute_embeddings(
@@ -814,15 +885,13 @@ def compute_embeddings_ollama(
 
     logger.info(f"Using batch size: {batch_size} for true batch processing")
 
-    # Get model token limit and apply truncation
-    token_limit = get_model_token_limit(model_name)
+    # Get model token limit and apply truncation before batching
+    token_limit = get_model_token_limit(model_name, base_url=resolved_host)
     logger.info(f"Model '{model_name}' token limit: {token_limit}")
 
-    # Apply token-aware truncation to all texts
-    truncated_texts = truncate_to_token_limit(texts, token_limit)
-    if len(truncated_texts) != len(texts):
-        logger.error("Truncation failed - text count mismatch")
-        truncated_texts = texts  # Fallback to original texts
+    # Apply truncation to all texts before batch processing
+    # Function logs truncation details internally
+    texts = truncate_to_token_limit(texts, token_limit)
 
     def get_batch_embeddings(batch_texts):
         """Get embeddings for a batch of texts using /api/embed endpoint."""
@@ -880,12 +949,12 @@ def compute_embeddings_ollama(
 
         return None, list(range(len(batch_texts)))
 
-    # Process truncated texts in batches
+    # Process texts in batches
     all_embeddings = []
     all_failed_indices = []
 
     # Setup progress bar if needed
-    show_progress = is_build or len(truncated_texts) > 10
+    show_progress = is_build or len(texts) > 10
     try:
         if show_progress:
             from tqdm import tqdm
@@ -893,7 +962,7 @@ def compute_embeddings_ollama(
         show_progress = False
 
     # Process batches
-    num_batches = (len(truncated_texts) + batch_size - 1) // batch_size
+    num_batches = (len(texts) + batch_size - 1) // batch_size
 
     if show_progress:
         batch_iterator = tqdm(range(num_batches), desc="Computing Ollama embeddings (batched)")
@@ -902,8 +971,8 @@ def compute_embeddings_ollama(
 
     for batch_idx in batch_iterator:
         start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, len(truncated_texts))
-        batch_texts = truncated_texts[start_idx:end_idx]
+        end_idx = min(start_idx + batch_size, len(texts))
+        batch_texts = texts[start_idx:end_idx]
 
         batch_embeddings, batch_failed = get_batch_embeddings(batch_texts)
 
@@ -918,11 +987,11 @@ def compute_embeddings_ollama(
 
     # Handle failed embeddings
     if all_failed_indices:
-        if len(all_failed_indices) == len(truncated_texts):
+        if len(all_failed_indices) == len(texts):
             raise RuntimeError("Failed to compute any embeddings")
 
         logger.warning(
-            f"Failed to compute embeddings for {len(all_failed_indices)}/{len(truncated_texts)} texts"
+            f"Failed to compute embeddings for {len(all_failed_indices)}/{len(texts)} texts"
         )
 
         # Use zero embeddings as fallback for failed ones
