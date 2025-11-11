@@ -11,6 +11,7 @@ This script demonstrates the ColQwen workflow:
 5. Generate similarity maps
 """
 
+import importlib.util
 import os
 from pathlib import Path
 
@@ -31,9 +32,14 @@ def main():
     # Step 1: Check dependencies
     print("\n📦 Checking dependencies...")
     try:
-        import pdf2image
         import torch
-        from colpali_engine.models import ColQwen2
+
+        # Check if pdf2image is available
+        if importlib.util.find_spec("pdf2image") is None:
+            raise ImportError("pdf2image not found")
+        # Check if colpali_engine is available
+        if importlib.util.find_spec("colpali_engine") is None:
+            raise ImportError("colpali_engine not found")
 
         print("✅ Core dependencies available")
         print(f"   - PyTorch: {torch.__version__}")

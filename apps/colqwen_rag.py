@@ -23,17 +23,17 @@ if str(_leann_core_src) not in sys.path:
 if str(_leann_hnsw_pkg) not in sys.path:
     sys.path.append(str(_leann_hnsw_pkg))
 
-import torch
-from colpali_engine import ColPali, ColPaliProcessor, ColQwen2, ColQwen2Processor
-from colpali_engine.utils.torch_utils import ListDataset
-from pdf2image import convert_from_path
-from PIL import Image
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+import torch  # noqa: E402
+from colpali_engine import ColPali, ColPaliProcessor, ColQwen2, ColQwen2Processor  # noqa: E402
+from colpali_engine.utils.torch_utils import ListDataset  # noqa: E402
+from pdf2image import convert_from_path  # noqa: E402
+from PIL import Image  # noqa: E402
+from torch.utils.data import DataLoader  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 # Import the existing multi-vector implementation
 sys.path.append(str(_repo_root / "apps" / "multimodal" / "vision-based-pdf-multi-vector"))
-from leann_multi_vector import LeannMultiVector
+from leann_multi_vector import LeannMultiVector  # noqa: E402
 
 
 class ColQwenRAG:
@@ -259,7 +259,7 @@ class ColQwenRAG:
                     elif not query:
                         continue
 
-                    results = self.search(index_name, query, top_k=3)
+                    self.search(index_name, query, top_k=3)
 
                     # TODO: Add answer generation with Qwen-VL
                     print("\n💡 For detailed answers, we can integrate Qwen-VL here!")
