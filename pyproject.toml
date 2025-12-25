@@ -157,6 +157,19 @@ exclude = ["localhost", "127.0.0.1", "example.com"]
 exclude_path = [".git/", ".venv/", "__pycache__/", "third_party/"]
 scheme = ["https", "http"]
 
+[tool.ty]
+# Type checking with ty (Astral's fast Python type checker)
+# ty is 10-100x faster than mypy. See: https://docs.astral.sh/ty/
+
+[tool.ty.environment]
+python-version = "3.11"
+extra-paths = ["apps", "packages/leann-core/src"]
+
+[tool.ty.rules]
+# Disable some noisy rules that have many false positives
+possibly-missing-attribute = "ignore"
+unresolved-import = "ignore"  # Many optional dependencies
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

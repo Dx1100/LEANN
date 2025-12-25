@@ -28,9 +28,30 @@ jobs:
         run: |
           uv run --only-group lint pre-commit run --all-files --show-diff-on-failure
 
+  type-check:
+    name: Type Check with ty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install ty
+        run: uv tool install ty
+
+      - name: Run ty type checker
+        run: |
+          # Run ty on core packages, apps, and tests
+          ty check packages/leann-core/src apps tests
 
   build:
-    needs: lint
+    needs: [lint, type-check]
     name: Build ${{ matrix.os }} Python ${{ matrix.python }}
     strategy:
       matrix:
