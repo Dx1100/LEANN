@@ -448,7 +448,8 @@ jobs:
           # Initialize pacman keyring to avoid "no secret key available" error
           pacman-key --init
           pacman -Syu --noconfirm
-          pacman -S --noconfirm python python-pip gcc git zlib openssl
+          # Install build essentials (uv will manage Python version)
+          pacman -S --noconfirm gcc git zlib openssl
 
       - name: Download ALL wheel artifacts from this run
         uses: actions/download-artifact@v5
@@ -461,7 +462,9 @@ jobs:
 
       - name: Create virtual environment and install wheels
         run: |
-          uv venv
+          # Use Python 3.13 explicitly (Arch has Python 3.14 which PyO3/tokenizers doesn't support yet)
+          uv python install 3.13
+          uv venv --python 3.13
           source .venv/bin/activate || source .venv/Scripts/activate
           uv pip install --find-links wheels leann-core
           uv pip install --find-links wheels leann-backend-hnsw
